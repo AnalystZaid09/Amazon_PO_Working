@@ -42,13 +42,13 @@ def color_doc_column(val):
 
 # Page configuration
 st.set_page_config(
-    page_title="Amazon Business Report Processor",
+    page_title="Amazon PO Working Report",
     page_icon="📊",
     layout="wide"
 )
 
 # Title and description
-st.title("📊 Amazon Business Report Processor")
+st.title("📊 Amazon PO Working Report")
 st.markdown("Upload your files to process Amazon business reports with inventory and RIS analysis")
 
 # Sidebar for file uploads
@@ -548,3 +548,4 @@ else:
     - PO recommendations
     - Case Pack information
     """)
+
