@@ -42,13 +42,13 @@ def color_doc_column(val):
 
 # Page configuration
 st.set_page_config(
-    page_title="Amazon PO Working Report",
+    page_title="Amazon Business Report Processor",
     page_icon="📊",
     layout="wide"
 )
 
 # Title and description
-st.title("📊 Amazon PO Working Report")
+st.title("📊 Amazon Business Report Processor")
 st.markdown("Upload your files to process Amazon business reports with inventory and RIS analysis")
 
 # Sidebar for file uploads
@@ -322,24 +322,70 @@ if st.sidebar.button("🚀 Process Reports", type="primary"):
                     columns='RIS Status', aggfunc='sum', fill_value=0,
                     margins=True, margins_name='Grand Total'
                 )
-                pivot_ris = pivot_ris.reset_index()  # convert index into columns
-                # If margins row present, it's a row with Merchant SKU == 'Grand Total'
-                if 'Grand Total' in pivot_ris['Merchant SKU'].values:
-                    grand_total_row = pivot_ris[pivot_ris['Merchant SKU'] == 'Grand Total'].copy()
-                    pivot_no_total = pivot_ris[pivot_ris['Merchant SKU'] != 'Grand Total'].copy()
-                    # Sort by Grand Total column if present
+
+                # We'll create two sorted pivot outputs:
+                # 1) pivot_sorted  (descending by Grand Total) - used earlier in UI
+                # 2) pivot_sorted_asc (ascending by Grand Total) - used to populate 'Low' mappings
+
+                # First, create pivot_ris as a DataFrame with Merchant SKU as a column (reset index)
+                pivot_ris_reset = pivot_ris.reset_index()
+                pivot_ris_reset.columns = pivot_ris_reset.columns.str.strip()
+
+                # Handle Grand Total row for descending sort (existing behavior)
+                if 'Grand Total' in pivot_ris_reset['Merchant SKU'].values:
+                    grand_total_row = pivot_ris_reset[pivot_ris_reset['Merchant SKU'] == 'Grand Total'].copy()
+                    pivot_no_total = pivot_ris_reset[pivot_ris_reset['Merchant SKU'] != 'Grand Total'].copy()
+                    # Sort by Grand Total descending if present
                     if 'Grand Total' in pivot_no_total.columns:
                         pivot_no_total = pivot_no_total.sort_values(by='Grand Total', ascending=False)
                     pivot_sorted = pd.concat([pivot_no_total, grand_total_row], ignore_index=True)
                 else:
-                    pivot_sorted = pivot_ris.copy()
+                    pivot_sorted = pivot_ris_reset.copy()
                     if 'Grand Total' in pivot_sorted.columns:
                         pivot_sorted = pivot_sorted.sort_values(by='Grand Total', ascending=False)
-
                 pivot_sorted.reset_index(drop=True, inplace=True)
 
-                # Map RIS pivot data to Business Report
-                pivot_sorted.columns = pivot_sorted.columns.str.strip()
+                # ---------- NEW: create ascending-sorted pivot (pivot_sorted_asc) ----------
+                # Make a copy and work robustly whether Grand Total is a row or index
+                pivot_for_asc = pivot_ris.reset_index()  # this yields Merchant SKU as a column if it wasn't already
+                pivot_for_asc.columns = pivot_for_asc.columns.str.strip()
+
+                # If Grand Total appears as a Merchant SKU value (common after reset_index())
+                if 'Merchant SKU' in pivot_for_asc.columns:
+                    if 'Grand Total' in pivot_for_asc['Merchant SKU'].values:
+                        grand_total_row_asc = pivot_for_asc[pivot_for_asc['Merchant SKU'] == 'Grand Total'].copy()
+                        pivot_no_total_asc = pivot_for_asc[pivot_for_asc['Merchant SKU'] != 'Grand Total'].copy()
+                    else:
+                        # No explicit Grand Total row - treat entire df as pivot_no_total
+                        grand_total_row_asc = pd.DataFrame(columns=pivot_for_asc.columns)
+                        pivot_no_total_asc = pivot_for_asc.copy()
+                else:
+                    # Unusual: Merchant SKU isn't a column (maybe pivot had Merchant SKU as index name)
+                    # Try to reset index differently
+                    pivot_for_asc = pivot_ris.copy()
+                    pivot_for_asc.index = pivot_for_asc.index.set_names(['Merchant SKU', 'Cluster', 'StateCluster'])
+                    pivot_for_asc = pivot_for_asc.reset_index()
+                    pivot_for_asc.columns = pivot_for_asc.columns.str.strip()
+                    if 'Merchant SKU' in pivot_for_asc.columns and 'Grand Total' in pivot_for_asc['Merchant SKU'].values:
+                        grand_total_row_asc = pivot_for_asc[pivot_for_asc['Merchant SKU'] == 'Grand Total'].copy()
+                        pivot_no_total_asc = pivot_for_asc[pivot_for_asc['Merchant SKU'] != 'Grand Total'].copy()
+                    else:
+                        grand_total_row_asc = pd.DataFrame(columns=pivot_for_asc.columns)
+                        pivot_no_total_asc = pivot_for_asc.copy()
+
+                # Sort remaining rows by Grand Total ascending (if Grand Total column exists)
+                if 'Grand Total' in pivot_no_total_asc.columns:
+                    pivot_no_total_asc = pivot_no_total_asc.sort_values(by='Grand Total', ascending=True)
+                # Concatenate (put Grand Total row at bottom if it exists)
+                if not grand_total_row_asc.empty:
+                    pivot_sorted_asc = pd.concat([pivot_no_total_asc, grand_total_row_asc], ignore_index=True)
+                else:
+                    pivot_sorted_asc = pivot_no_total_asc.copy()
+
+                pivot_sorted_asc.reset_index(drop=True, inplace=True)
+                pivot_sorted_asc.columns = pivot_sorted_asc.columns.str.strip()
+
+                # ---------- Map RIS pivot data to Business Report (existing 'High' mappings) ----------
                 if 'Merchant SKU' in pivot_sorted.columns:
                     pivot_sorted_map_cluster = pivot_sorted.set_index('Merchant SKU')['Cluster'].to_dict()
                     Business_Report['RIS High Cluster'] = Business_Report['SKU'].map(pivot_sorted_map_cluster)
@@ -359,6 +405,38 @@ if st.sidebar.button("🚀 Process Reports", type="primary"):
                     Business_Report['RIS High Cluster'] = np.nan
                     Business_Report['RIS QTY'] = np.nan
                     Business_Report['RIS State'] = np.nan
+
+                # ---------- NEW: Create mapping from ascending pivot (Low cluster / Low qty / Low state) ----------
+                if 'Merchant SKU' in pivot_sorted_asc.columns:
+                    try:
+                        pivot_sorted_asc_maps_available = True
+                        # Safe get with .get to avoid KeyError if column absent
+                        if 'Cluster' in pivot_sorted_asc.columns:
+                            pivot_sorted_map_asc = pivot_sorted_asc.set_index('Merchant SKU')['Cluster'].to_dict()
+                            Business_Report['RIS Low Cluster'] = Business_Report['SKU'].map(pivot_sorted_map_asc)
+                        else:
+                            Business_Report['RIS Low Cluster'] = np.nan
+
+                        if 'Grand Total' in pivot_sorted_asc.columns:
+                            pivot_sorted_map_asc1 = pivot_sorted_asc.set_index('Merchant SKU')['Grand Total'].to_dict()
+                            Business_Report['RIS Low QTY'] = Business_Report['SKU'].map(pivot_sorted_map_asc1)
+                        else:
+                            Business_Report['RIS Low QTY'] = np.nan
+
+                        if 'StateCluster' in pivot_sorted_asc.columns:
+                            pivot_sorted_map_asc2 = pivot_sorted_asc.set_index('Merchant SKU')['StateCluster'].to_dict()
+                            Business_Report['RIS Low State'] = Business_Report['SKU'].map(pivot_sorted_map_asc2)
+                        else:
+                            Business_Report['RIS Low State'] = np.nan
+                    except Exception:
+                        # If any mapping fails, ensure columns exist with NaN
+                        Business_Report['RIS Low Cluster'] = np.nan
+                        Business_Report['RIS Low QTY'] = np.nan
+                        Business_Report['RIS Low State'] = np.nan
+                else:
+                    Business_Report['RIS Low Cluster'] = np.nan
+                    Business_Report['RIS Low QTY'] = np.nan
+                    Business_Report['RIS Low State'] = np.nan
 
                 # PO State
                 Business_Report['PO State'] = Business_Report['DOC'].apply(
