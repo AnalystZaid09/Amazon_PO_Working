@@ -192,10 +192,10 @@ if process_button:
                     ris_high_cluster_map = ris_high.set_index("ASIN")["FC Cluster"].to_dict()
                     ris_qty_map = ris_high.set_index("ASIN")["RIS"].to_dict()
                     
-                    business_pivot["RIS High Cluster"] = business_pivot["(Child) ASIN"].map(ris_high_cluster_map)
+                    business_pivot["RIS Cluster"] = business_pivot["(Child) ASIN"].map(ris_high_cluster_map)
                     business_pivot["RIS Qty"] = business_pivot["(Child) ASIN"].map(ris_qty_map)
                     business_pivot["RIS Qty"] = business_pivot["RIS Qty"].fillna(0)
-                    business_pivot["RIS High Cluster"] = business_pivot["RIS High Cluster"].fillna("")
+                    business_pivot["RIS Cluster"] = business_pivot["RIS Cluster"].fillna("")
                 
                 # RIS Low Cluster (sorted by Non RIS descending)
                 if "Non RIS" in asin_fc_ris_pivot.columns:
@@ -203,20 +203,20 @@ if process_button:
                     ris_low_cluster_map = ris_low.set_index("ASIN")["FC Cluster"].to_dict()
                     ris_low_qty_map = ris_low.set_index("ASIN")["Non RIS"].to_dict()
                     
-                    business_pivot["RIS Low Cluster"] = business_pivot["(Child) ASIN"].map(ris_low_cluster_map)
-                    business_pivot["RIS Low Qty"] = business_pivot["(Child) ASIN"].map(ris_low_qty_map)
-                    business_pivot["RIS Low Qty"] = business_pivot["RIS Low Qty"].fillna(0)
-                    business_pivot["RIS Low Cluster"] = business_pivot["RIS Low Cluster"].fillna("")
+                    business_pivot["Non RIS Cluster"] = business_pivot["(Child) ASIN"].map(ris_low_cluster_map)
+                    business_pivot["Non RIS Qty"] = business_pivot["(Child) ASIN"].map(ris_low_qty_map)
+                    business_pivot["Non RIS Qty"] = business_pivot["Non RIS Qty"].fillna(0)
+                    business_pivot["Non RIS Cluster"] = business_pivot["Non RIS Cluster"].fillna("")
                 
                 # Load State FC mapping
                 state_fc = pd.read_excel(state_fc_file, sheet_name="Sheet1")
                 ris_state_map = state_fc.set_index("Cluster")["State"].to_dict()
                 
-                business_pivot["RIS State"] = business_pivot["RIS High Cluster"].map(ris_state_map)
+                business_pivot["RIS State"] = business_pivot["RIS Cluster"].map(ris_state_map)
                 business_pivot["RIS State"] = business_pivot["RIS State"].fillna("")
                 
-                business_pivot["RIS Low State"] = business_pivot["RIS Low Cluster"].map(ris_state_map)
-                business_pivot["RIS Low State"] = business_pivot["RIS Low State"].fillna("")
+                business_pivot["Non RIS State"] = business_pivot["Non RIS Cluster"].map(ris_state_map)
+                business_pivot["Non RIS State"] = business_pivot["Non RIS State"].fillna("")
                 
                 # Create PO State
                 business_pivot["PO State"] = business_pivot["DOC"].apply(
@@ -228,8 +228,8 @@ if process_button:
                     "SKU", "(Child) ASIN", "Vendor SKU Codes", "Brand", "Brand Manager",
                     "Total Order Items", "Total Order Items - B2B", "Total Sales",
                     "afn-fulfillable-quantity", "afn-reserved-quantity", "Total Stock",
-                    "DRR", "DOC", "RIS High Cluster", "RIS Qty", "RIS State",
-                    "RIS Low Cluster", "RIS Low Qty", "RIS Low State", "PO State"
+                    "DRR", "DOC", "RIS Cluster", "RIS Qty", "RIS State",
+                    "Non RIS Cluster", "Non RIS Qty", "Non RIS State", "PO State"
                 ]
                 
                 business_pivot = business_pivot[column_order]
@@ -373,12 +373,12 @@ if st.session_state.processed and st.session_state.business_pivot is not None:
         
         with col1:
             st.write("**Top RIS Clusters (Highest RIS Quantity)**")
-            ris_high_summary = df.groupby("RIS High Cluster")["RIS Qty"].sum().sort_values(ascending=False).head(10)
+            ris_high_summary = df.groupby("RIS Cluster")["RIS Qty"].sum().sort_values(ascending=False).head(10)
             st.dataframe(ris_high_summary, use_container_width=True)
         
         with col2:
             st.write("**Top Non-RIS Clusters (Highest Non-RIS Quantity)**")
-            ris_low_summary = df.groupby("RIS Low Cluster")["RIS Low Qty"].sum().sort_values(ascending=False).head(10)
+            ris_low_summary = df.groupby("Non RIS Cluster")["Non RIS Qty"].sum().sort_values(ascending=False).head(10)
             st.dataframe(ris_low_summary, use_container_width=True)
         
         st.divider()
@@ -394,7 +394,7 @@ if st.session_state.processed and st.session_state.business_pivot is not None:
         st.divider()
         
         st.write("**Detailed RIS Data by Product**")
-        ris_detailed = df[df["RIS High Cluster"] != ""][["SKU", "(Child) ASIN", "Brand", "Brand Manager", "RIS High Cluster", "RIS Qty", "RIS State", "RIS Low Cluster", "RIS Low Qty", "RIS Low State"]]
+        ris_detailed = df[df["RIS Cluster"] != ""][["SKU", "(Child) ASIN", "Brand", "Brand Manager", "RIS Cluster", "RIS Qty", "RIS State", "Non RIS Cluster", "Non RIS Qty", "Non RIS State"]]
         st.dataframe(ris_detailed, use_container_width=True, height=300)
         
         # Download button for RIS Analysis
@@ -405,7 +405,7 @@ if st.session_state.processed and st.session_state.business_pivot is not None:
             with pd.ExcelWriter(ris_output, engine='openpyxl') as writer:
                 ris_detailed.to_excel(writer, sheet_name='RIS Detailed', index=False)
                 
-                ris_cluster_summary = df.groupby("RIS High Cluster").agg({
+                ris_cluster_summary = df.groupby("RIS Cluster").agg({
                     "RIS Qty": "sum",
                     "(Child) ASIN": "count"
                 }).reset_index()
@@ -460,6 +460,7 @@ else:
     - RIS Data Excel (regional inventory storage)
     - State FC Cluster Excel (fulfillment center mapping)
     """)
+
 
 
 
