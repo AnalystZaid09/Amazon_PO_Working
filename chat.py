@@ -188,7 +188,7 @@ if process_button:
                 
                 # RIS High Cluster (sorted by RIS descending)
                 if "RIS" in asin_fc_ris_pivot.columns:
-                    ris_high = asin_fc_ris_pivot.sort_values("RIS", ascending=False)
+                    ris_high = asin_fc_ris_pivot.sort_values("RIS", ascending=True)
                     ris_high_cluster_map = ris_high.set_index("ASIN")["FC Cluster"].to_dict()
                     ris_qty_map = ris_high.set_index("ASIN")["RIS"].to_dict()
                     
@@ -199,7 +199,7 @@ if process_button:
                 
                 # RIS Low Cluster (sorted by Low RIS descending)
                 if "Low RIS" in asin_fc_ris_pivot.columns:
-                    ris_low = asin_fc_ris_pivot.sort_values("Low RIS", ascending=False)
+                    ris_low = asin_fc_ris_pivot.sort_values("Low RIS", ascending=True)
                     ris_low_cluster_map = ris_low.set_index("ASIN")["FC Cluster"].to_dict()
                     ris_low_qty_map = ris_low.set_index("ASIN")["Low RIS"].to_dict()
                     
@@ -460,4 +460,5 @@ else:
     - RIS Data Excel (regional inventory storage)
     - State FC Cluster Excel (fulfillment center mapping)
     """)
+
 
