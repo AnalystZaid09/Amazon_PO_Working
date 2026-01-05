@@ -1,629 +1,462 @@
 import streamlit as st
 import pandas as pd
-import io
 import numpy as np
-import openpyxl
-from openpyxl.styles import PatternFill
-from openpyxl.utils import get_column_letter
-
-# Helper function to color DOC column (used for in-app Styler)
-def color_doc_column(val):
-    """
-    Color coding based on DOC ranges:
-    0-7: Critical (Dark Red)
-    7-15: Low (Orange)
-    15-30: Good (Green)
-    30-45: Optimal (Yellow/Gold)
-    45-60: High (Blue)
-    60-90: Excess (Brown)
-    >90: Over (Dark Gray)
-    Returns CSS style string.
-    """
-    try:
-        if pd.isna(val):
-            return ''
-        v = float(val)
-        if v <= 7:
-            return 'background-color: #8B0000; color: white'
-        elif v <= 15:
-            return 'background-color: #FFA500; color: white'
-        elif v <= 30:
-            return 'background-color: #228B22; color: white'
-        elif v <= 45:
-            return 'background-color: #DAA520; color: white'
-        elif v <= 60:
-            return 'background-color: #4169E1; color: white'
-        elif v <= 90:
-            return 'background-color: #8B4513; color: white'
-        else:
-            return 'background-color: #696969; color: white'
-    except Exception:
-        return ''
+from io import BytesIO
 
 # Page configuration
 st.set_page_config(
-    page_title="Amazon Business Report Processor",
-    page_icon="📊",
+    page_title="Amazon PO Working Analysis",
+    page_icon="📦",
     layout="wide"
 )
 
-# Title and description
-st.title("📊 Amazon Business Report Processor")
-st.markdown("Upload your files to process Amazon business reports with inventory and RIS analysis")
+# Custom CSS
+st.markdown("""
+    <style>
+    .main {
+        background: linear-gradient(to bottom right, #EBF4FF, #E0E7FF);
+    }
+    .stAlert {
+        background-color: #EBF4FF;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# Title
+st.title("📦 Amazon Po Working Analysis Dashboard")
+st.markdown("Upload your files and analyze inventory, sales, and RIS data")
+st.divider()
+
+# Initialize session state
+if 'processed' not in st.session_state:
+    st.session_state.processed = False
+if 'business_pivot' not in st.session_state:
+    st.session_state.business_pivot = None
 
 # Sidebar for file uploads
-st.sidebar.header("📁 Upload Files")
-
-uploaded_business_report = st.sidebar.file_uploader(
-    "Business Report CSV",
-    type=['csv'],
-    help="Upload BusinessReport-11-12-25.csv"
-)
-
-uploaded_pm = st.sidebar.file_uploader(
-    "Product Master Excel",
-    type=['xlsx'],
-    help="Upload PM.xlsx"
-)
-
-uploaded_inventory = st.sidebar.file_uploader(
-    "Inventory CSV",
-    type=['csv'],
-    help="Upload 400337020433.csv"
-)
-
-uploaded_ris = st.sidebar.file_uploader(
-    "RIS CSV",
-    type=['csv'],
-    help="Upload 400334020433.csv"
-)
-
-uploaded_fc_state = st.sidebar.file_uploader(
-    "FC State Cluster Excel",
-    type=['xlsx'],
-    help="Upload State FC Cluster.xlsx"
-)
-
-# Number of days input with explanation
-st.sidebar.markdown("### 📅 Number of Days for Analysis")
-st.sidebar.info("""
-**What is Number of Days?**
-
-This is the time period covered by your sales data (e.g., 30 or 31 for monthly data).
-
-• **DRR** (Daily Run Rate) = Total Order Items ÷ Days
-• **DOC** (Days of Coverage) = Fulfillable Qty ÷ DRR
-
-DOC tells you how many days your current inventory will last at the current sales rate.
-""")
-
-no_of_days = st.sidebar.number_input(
-    "Enter the number of days",
-    min_value=1,
-    value=31,
-    help="Time period covered by your sales data"
-)
-
-# State mapping dictionary (unchanged)
-state_mapping = {
-    'MAHARASHTRA': 'Maharashtra', 'Maharashtra': 'Maharashtra', 'maharashtra': 'Maharashtra',
-    'Maharasthra': 'Maharashtra', 'Thane dt.Maharashtea': 'Maharashtra',
-    'GJ': 'Gujarat', 'Gujarat': 'Gujarat', 'GUJARAT': 'Gujarat', 'Gujrat': 'Gujarat', 'Gujurat': 'Gujarat',
-    'TELANGANA': 'Telangana', 'Telangana': 'Telangana', 'telangana': 'Telangana', 'TG': 'Telangana',
-    'TAMIL NADU': 'Tamil Nadu', 'Tamil Nadu': 'Tamil Nadu', 'TamilNadu': 'Tamil Nadu',
-    'Tamilnadu': 'Tamil Nadu', 'TN': 'Tamil Nadu',
-    'KARNATAKA': 'Karnataka', 'Karnataka': 'Karnataka', 'karnataka': 'Karnataka',
-    'UTTAR PRADESH': 'Uttar Pradesh', 'Uttar Pradesh': 'Uttar Pradesh',
-    'uttar pradesh': 'Uttar Pradesh', 'UP': 'Uttar Pradesh',
-    'HARYANA': 'Haryana', 'Haryana': 'Haryana', 'HR': 'Haryana',
-    'DELHI': 'Delhi', 'Delhi': 'Delhi', 'delhi': 'Delhi', 'New delhi': 'Delhi',
-    'New Delhi': 'Delhi', 'NEW DELHI': 'Delhi', 'DL': 'Delhi',
-    'ASSAM': 'Assam', 'Assam': 'Assam',
-    'WEST BENGAL': 'West Bengal', 'West Bengal': 'West Bengal', 'West bengal': 'West Bengal',
-    'MADHYA PRADESH': 'Madhya Pradesh', 'madhya pradesh': 'Madhya Pradesh', 'Madhya Pradesh': 'Madhya Pradesh',
-    'PUNJAB': 'Punjab', 'Punjab': 'Punjab', 'punjab': 'Punjab',
-    'RAJASTHAN': 'Rajasthan', 'Rajasthan': 'Rajasthan',
-    'GOA': 'Goa', 'JHARKHAND': 'Jharkhand', 'UTTARAKHAND': 'Uttarakhand', 'Uttarakhand': 'Uttarakhand',
-    'BIHAR': 'Bihar', 'MIZORAM': 'Mizoram', 'MEGHALAYA': 'Meghalaya', 'CHHATTISGARH': 'Chhattisgarh',
-    'CHANDIGARH': 'Chandigarh', 'Chandigarh': 'Chandigarh', 'JAMMU & KASHMIR': 'Jammu & Kashmir',
-    'NAGALAND': 'Nagaland', 'SIKKIM': 'Sikkim', 'TRIPURA': 'Tripura',
-    'ARUNACHAL PRADESH': 'Arunachal Pradesh', 'ANDAMAN & NICOBAR ISLANDS': 'Andaman & Nicobar Islands',
-    'PUDUCHERRY': 'Puducherry', 'LADAKH': 'Ladakh',
-    'ANDHRA PRADESH': 'Andhra Pradesh', 'Andhra Pradesh': 'Andhra Pradesh', 'Andhra pradesh': 'Andhra Pradesh',
-    'ODISHA': 'Odisha', 'Orissa': 'Odisha',
-    'DAMAN & DIU': 'Maharashtra', 'DAMAN AND DIU': 'Maharashtra', 'DADRA AND NAGAR HAVELI': 'Maharashtra',
-}
-
-# ---------- Create Excel with DOC formatting ----------
-def create_excel_with_doc_formatting(df, doc_col_name='DOC'):
-    """
-    Return bytes of an Excel file where the DOC column cells are filled
-    using the color ranges defined in color_doc_column.
-    """
-    output = io.BytesIO()
-    # Use ExcelWriter with openpyxl engine
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        # Write df to Excel
-        df.to_excel(writer, sheet_name="BusinessReport", index=False)
-        workbook = writer.book
-        worksheet = writer.sheets["BusinessReport"]
-
-        # If DOC column missing, context manager will handle saving; just return bytes after exit
-        if doc_col_name not in df.columns:
-            pass  # nothing to color
-
-        else:
-            # Determine DOC column letter and row range
-            doc_col_idx = list(df.columns).index(doc_col_name) + 1  # 1-based
-            doc_col_letter = get_column_letter(doc_col_idx)
-            first_data_row = 2
-            last_data_row = len(df) + 1
-
-            # Define cell fills
-            fills = {
-                'critical': PatternFill(start_color="8B0000", end_color="8B0000", fill_type="solid"),
-                'low':      PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid"),
-                'good':     PatternFill(start_color="228B22", end_color="228B22", fill_type="solid"),
-                'optimal':  PatternFill(start_color="DAA520", end_color="DAA520", fill_type="solid"),
-                'high':     PatternFill(start_color="4169E1", end_color="4169E1", fill_type="solid"),
-                'excess':   PatternFill(start_color="8B4513", end_color="8B4513", fill_type="solid"),
-                'over':     PatternFill(start_color="696969", end_color="696969", fill_type="solid"),
-            }
-
-            # Apply fill iteratively (deterministic and clear)
-            for row in range(first_data_row, last_data_row + 1):
-                cell_ref = f"{doc_col_letter}{row}"
-                cell = worksheet[cell_ref]
-                try:
-                    v = float(cell.value) if cell.value not in (None, '') else None
-                except Exception:
-                    v = None
-
-                if v is None:
-                    continue
-                if v <= 7:
-                    cell.fill = fills['critical']
-                elif v <= 15:
-                    cell.fill = fills['low']
-                elif v <= 30:
-                    cell.fill = fills['good']
-                elif v <= 45:
-                    cell.fill = fills['optimal']
-                elif v <= 60:
-                    cell.fill = fills['high']
-                elif v <= 90:
-                    cell.fill = fills['excess']
-                else:
-                    cell.fill = fills['over']
-
-        # Freeze header row
-        worksheet.freeze_panes = worksheet['A2']
-        # Don't call writer.save() - context manager saves on exit
-
-    # context manager closed, buffer contains the workbook
-    output.seek(0)
-    return output.getvalue()
-
-# ---------- Main processing ----------
-
-# Process button
-if st.sidebar.button("🚀 Process Reports", type="primary"):
-    if all([uploaded_business_report, uploaded_pm, uploaded_inventory, uploaded_ris, uploaded_fc_state]):
-        try:
-            with st.spinner("Processing files..."):
-                # Load files
-                Business_Report = pd.read_csv(uploaded_business_report)
-                PM = pd.read_excel(uploaded_pm)
-                Inventory = pd.read_csv(uploaded_inventory)
-                RIS = pd.read_csv(uploaded_ris)
-                FC_State = pd.read_excel(uploaded_fc_state, sheet_name="Sheet2")
-
-                # Process PM data
-                PM = PM.iloc[:, 0:7].copy()
-                PM.columns = ["ASIN", "B", "C", "Vendor SKU Codes", "Brand Manager", "F", "Brand"]
-
-                # Add Brand Manager and Brand to Business Report
-                Business_Report = Business_Report.merge(
-                    PM[["ASIN", "Brand Manager"]], how="left",
-                    left_on="(Parent) ASIN", right_on="ASIN"
-                )
-                if "Title" in Business_Report.columns:
-                    insert_pos = Business_Report.columns.get_loc("Title")
-                    col = Business_Report.pop("Brand Manager")
-                    Business_Report.insert(insert_pos, "Brand Manager", col)
-
-                Business_Report = Business_Report.merge(
-                    PM[["ASIN", "Brand"]], how="left",
-                    left_on="(Parent) ASIN", right_on="ASIN"
-                )
-                if "Title" in Business_Report.columns:
-                    insert_pos = Business_Report.columns.get_loc("Title")
-                    col = Business_Report.pop("Brand")
-                    Business_Report.insert(insert_pos, "Brand", col)
-
-                # Add Vendor SKU Codes (keep as string-safe)
-                Business_Report = Business_Report.merge(
-                    PM[["ASIN", "Vendor SKU Codes"]], how="left",
-                    left_on="(Parent) ASIN", right_on="ASIN"
-                )
-
-                # Process Inventory data
-                Inventory.columns = Inventory.columns.str.strip()
-                # defensive: ensure there are enough columns
-                if len(Inventory.columns) >= 13:
-                    lookup_col = Inventory.columns[2]
-                    return_col = Inventory.columns[10]
-                    return_col_13 = Inventory.columns[12]
-
-                    mi_map = Inventory.set_index(lookup_col)[return_col].to_dict()
-                    Business_Report["Current Stock"] = Business_Report["(Parent) ASIN"].map(mi_map)
-
-                    mi_res_map = Inventory.set_index(lookup_col)[return_col_13].to_dict()
-                    Business_Report["Reserve Stock"] = Business_Report["(Parent) ASIN"].map(mi_res_map)
-                else:
-                    # Fallback: create columns if inventory shape unexpected
-                    Business_Report["Current Stock"] = np.nan
-                    Business_Report["Reserve Stock"] = np.nan
-
-                # Calculate DRR (clean Total Order Items)
-                if "Total Order Items" in Business_Report.columns:
-                    Business_Report["Total Order Items"] = (
-                        Business_Report["Total Order Items"]
-                        .astype(str).str.replace("\u00A0", "", regex=False)
-                        .str.replace(",", "", regex=False)
-                        .str.replace(r"[^\d\.\-]", "", regex=True)
-                    )
-                    Business_Report["Total Order Items"] = pd.to_numeric(
-                        Business_Report["Total Order Items"], errors="coerce"
-                    )
-                    Business_Report["DRR"] = (Business_Report["Total Order Items"] / no_of_days).round(2)
-                else:
-                    Business_Report["DRR"] = np.nan
-
-                # Calculate DOC
-                Business_Report["Current Stock"] = pd.to_numeric(Business_Report.get("Current Stock"), errors="coerce")
-                Business_Report["DRR"] = pd.to_numeric(Business_Report.get("DRR"), errors="coerce")
-                Business_Report["DOC"] = (Business_Report["Current Stock"] / Business_Report["DRR"]).round(2)
-
-                # Process RIS data: map FC -> state/cluster
-                FC_State.columns = FC_State.columns.str.strip()
-                if len(FC_State.columns) >= 4:
-                    fc_map = FC_State.set_index(FC_State.columns[0])[FC_State.columns[1]].to_dict()
-                    RIS['State'] = RIS['FC'].map(fc_map)
-
-                    fc_map_3 = FC_State.set_index(FC_State.columns[0])[FC_State.columns[2]].to_dict()
-                    RIS['Cluster'] = RIS['FC'].map(fc_map_3)
-
-                    fc_map_4 = FC_State.set_index(FC_State.columns[0])[FC_State.columns[3]].to_dict()
-                    RIS['StateCluster'] = RIS['FC'].map(fc_map_4)
-                else:
-                    RIS['State'] = np.nan
-                    RIS['Cluster'] = np.nan
-                    RIS['StateCluster'] = np.nan
-
-                # Normalize shipping state in RIS
-                RIS['Shipping State'] = (
-                    RIS['Shipping State'].map(state_mapping)
-                    .fillna(RIS['Shipping State'].str.title())
-                )
-
-                # RIS Status
-                RIS["RIS Status"] = RIS.apply(
-                    lambda row: "RIS" if str(row.get("Shipping State", "")).strip().replace(" ", "") ==
-                                          str(row.get("State", "")).strip().replace(" ", "")
-                                else "Non RIS",
-                    axis=1
-                )
-
-                # Create pivot table: pivot and avoid multi-index drop pitfalls
-                pivot_ris = pd.pivot_table(
-                    RIS, values='Shipped Quantity',
-                    index=['Merchant SKU', 'Cluster', 'StateCluster'],
-                    columns='RIS Status', aggfunc='sum', fill_value=0,
-                    margins=True, margins_name='Grand Total'
-                )
-
-                # We'll create two sorted pivot outputs:
-                # 1) pivot_sorted  (descending by Grand Total) - used earlier in UI
-                # 2) pivot_sorted_asc (ascending by Grand Total) - used to populate 'Low' mappings
-
-                # First, create pivot_ris as a DataFrame with Merchant SKU as a column (reset index)
-                pivot_ris_reset = pivot_ris.reset_index()
-                pivot_ris_reset.columns = pivot_ris_reset.columns.str.strip()
-
-                # Handle Grand Total row for descending sort (existing behavior)
-                if 'Grand Total' in pivot_ris_reset['Merchant SKU'].values:
-                    grand_total_row = pivot_ris_reset[pivot_ris_reset['Merchant SKU'] == 'Grand Total'].copy()
-                    pivot_no_total = pivot_ris_reset[pivot_ris_reset['Merchant SKU'] != 'Grand Total'].copy()
-                    # Sort by Grand Total descending if present
-                    if 'Grand Total' in pivot_no_total.columns:
-                        pivot_no_total = pivot_no_total.sort_values(by='Grand Total', ascending=False)
-                    pivot_sorted = pd.concat([pivot_no_total, grand_total_row], ignore_index=True)
-                else:
-                    pivot_sorted = pivot_ris_reset.copy()
-                    if 'Grand Total' in pivot_sorted.columns:
-                        pivot_sorted = pivot_sorted.sort_values(by='Grand Total', ascending=False)
-                pivot_sorted.reset_index(drop=True, inplace=True)
-
-                # ---------- NEW: create ascending-sorted pivot (pivot_sorted_asc) ----------
-                # Make a copy and work robustly whether Grand Total is a row or index
-                pivot_for_asc = pivot_ris.reset_index()  # this yields Merchant SKU as a column if it wasn't already
-                pivot_for_asc.columns = pivot_for_asc.columns.str.strip()
-
-                # If Grand Total appears as a Merchant SKU value (common after reset_index())
-                if 'Merchant SKU' in pivot_for_asc.columns:
-                    if 'Grand Total' in pivot_for_asc['Merchant SKU'].values:
-                        grand_total_row_asc = pivot_for_asc[pivot_for_asc['Merchant SKU'] == 'Grand Total'].copy()
-                        pivot_no_total_asc = pivot_for_asc[pivot_for_asc['Merchant SKU'] != 'Grand Total'].copy()
-                    else:
-                        # No explicit Grand Total row - treat entire df as pivot_no_total
-                        grand_total_row_asc = pd.DataFrame(columns=pivot_for_asc.columns)
-                        pivot_no_total_asc = pivot_for_asc.copy()
-                else:
-                    # Unusual: Merchant SKU isn't a column (maybe pivot had Merchant SKU as index name)
-                    # Try to reset index differently
-                    pivot_for_asc = pivot_ris.copy()
-                    pivot_for_asc.index = pivot_for_asc.index.set_names(['Merchant SKU', 'Cluster', 'StateCluster'])
-                    pivot_for_asc = pivot_for_asc.reset_index()
-                    pivot_for_asc.columns = pivot_for_asc.columns.str.strip()
-                    if 'Merchant SKU' in pivot_for_asc.columns and 'Grand Total' in pivot_for_asc['Merchant SKU'].values:
-                        grand_total_row_asc = pivot_for_asc[pivot_for_asc['Merchant SKU'] == 'Grand Total'].copy()
-                        pivot_no_total_asc = pivot_for_asc[pivot_for_asc['Merchant SKU'] != 'Grand Total'].copy()
-                    else:
-                        grand_total_row_asc = pd.DataFrame(columns=pivot_for_asc.columns)
-                        pivot_no_total_asc = pivot_for_asc.copy()
-
-                # Sort remaining rows by Grand Total ascending (if Grand Total column exists)
-                if 'Grand Total' in pivot_no_total_asc.columns:
-                    pivot_no_total_asc = pivot_no_total_asc.sort_values(by='Grand Total', ascending=True)
-                # Concatenate (put Grand Total row at bottom if it exists)
-                if not grand_total_row_asc.empty:
-                    pivot_sorted_asc = pd.concat([pivot_no_total_asc, grand_total_row_asc], ignore_index=True)
-                else:
-                    pivot_sorted_asc = pivot_no_total_asc.copy()
-
-                pivot_sorted_asc.reset_index(drop=True, inplace=True)
-                pivot_sorted_asc.columns = pivot_sorted_asc.columns.str.strip()
-
-                # ---------- Map RIS pivot data to Business Report (existing 'High' mappings) ----------
-                if 'Merchant SKU' in pivot_sorted.columns:
-                    pivot_sorted_map_cluster = pivot_sorted.set_index('Merchant SKU')['Cluster'].to_dict()
-                    Business_Report['RIS High Cluster'] = Business_Report['SKU'].map(pivot_sorted_map_cluster)
-
-                    if 'Grand Total' in pivot_sorted.columns:
-                        pivot_sorted_map_qty = pivot_sorted.set_index('Merchant SKU')['Grand Total'].to_dict()
-                        Business_Report['RIS QTY'] = Business_Report['SKU'].map(pivot_sorted_map_qty)
-                    else:
-                        Business_Report['RIS QTY'] = np.nan
-
-                    if 'StateCluster' in pivot_sorted.columns:
-                        pivot_sorted_map_state = pivot_sorted.set_index('Merchant SKU')['StateCluster'].to_dict()
-                        Business_Report['RIS State'] = Business_Report['SKU'].map(pivot_sorted_map_state)
-                    else:
-                        Business_Report['RIS State'] = np.nan
-                else:
-                    Business_Report['RIS High Cluster'] = np.nan
-                    Business_Report['RIS QTY'] = np.nan
-                    Business_Report['RIS State'] = np.nan
-
-                # ---------- NEW: Create mapping from ascending pivot (Low cluster / Low qty / Low state) ----------
-                if 'Merchant SKU' in pivot_sorted_asc.columns:
-                    try:
-                        pivot_sorted_asc_maps_available = True
-                        # Safe get with .get to avoid KeyError if column absent
-                        if 'Cluster' in pivot_sorted_asc.columns:
-                            pivot_sorted_map_asc = pivot_sorted_asc.set_index('Merchant SKU')['Cluster'].to_dict()
-                            Business_Report['RIS Low Cluster'] = Business_Report['SKU'].map(pivot_sorted_map_asc)
-                        else:
-                            Business_Report['RIS Low Cluster'] = np.nan
-
-                        if 'Grand Total' in pivot_sorted_asc.columns:
-                            pivot_sorted_map_asc1 = pivot_sorted_asc.set_index('Merchant SKU')['Grand Total'].to_dict()
-                            Business_Report['RIS Low QTY'] = Business_Report['SKU'].map(pivot_sorted_map_asc1)
-                        else:
-                            Business_Report['RIS Low QTY'] = np.nan
-
-                        if 'StateCluster' in pivot_sorted_asc.columns:
-                            pivot_sorted_map_asc2 = pivot_sorted_asc.set_index('Merchant SKU')['StateCluster'].to_dict()
-                            Business_Report['RIS Low State'] = Business_Report['SKU'].map(pivot_sorted_map_asc2)
-                        else:
-                            Business_Report['RIS Low State'] = np.nan
-                    except Exception:
-                        # If any mapping fails, ensure columns exist with NaN
-                        Business_Report['RIS Low Cluster'] = np.nan
-                        Business_Report['RIS Low QTY'] = np.nan
-                        Business_Report['RIS Low State'] = np.nan
-                else:
-                    Business_Report['RIS Low Cluster'] = np.nan
-                    Business_Report['RIS Low QTY'] = np.nan
-                    Business_Report['RIS Low State'] = np.nan
-
-                # PO State
-                Business_Report['PO State'] = Business_Report['DOC'].apply(
-                    lambda x: "Create A PO" if pd.notna(x) and x <= 30 else "We Have Stock"
-                )
-
-                # Case Pack handling - use np.where to avoid replace downcasting warning
-                PM1 = pd.read_excel(uploaded_pm)
-                PM1.columns = PM1.columns.str.strip()
-                if PM1.shape[1] > 11:
-                    casepack_map = PM1.set_index(PM1.columns[0])[PM1.columns[11]].to_dict()
-                    Business_Report['Case Pack'] = Business_Report['(Parent) ASIN'].map(casepack_map)
-                else:
-                    Business_Report['Case Pack'] = 1
-
-                # Replace "NO CASE PACK" with 1 using np.where (avoids future downcast warning) and coerce to numeric
-                Business_Report['Case Pack'] = np.where(Business_Report['Case Pack'] == "NO CASE PACK", 1, Business_Report['Case Pack'])
-                Business_Report['Case Pack'] = pd.to_numeric(Business_Report['Case Pack'], errors='coerce').fillna(1).astype(float)
-
-                # ---------- Ensure object columns are string to avoid pyarrow serialization errors ----------
-                # Convert all object dtype columns to string (safe and avoids mixed-type serialization issues)
-                obj_cols = Business_Report.select_dtypes(include=['object']).columns.tolist()
-                for c in obj_cols:
-                    Business_Report[c] = Business_Report[c].astype(str).fillna('')
-
-                # Reformat numeric columns consistently
-                Business_Report['DOC'] = pd.to_numeric(Business_Report.get('DOC'), errors='coerce').round(2)
-                Business_Report['DRR'] = pd.to_numeric(Business_Report.get('DRR'), errors='coerce').round(2)
-                Business_Report['Current Stock'] = pd.to_numeric(Business_Report.get('Current Stock'), errors='coerce')
-
-                # Create Excel bytes with DOC conditional formatting
-                excel_bytes = create_excel_with_doc_formatting(Business_Report, doc_col_name='DOC')
-
-            st.success("✅ Processing completed successfully!")
-
-            # Display DOC Color Legend
-            st.markdown("### 🎨 DOC Color Legend")
-            col1, col2, col3, col4, col5, col6 = st.columns(6)
-            with col1:
-                st.markdown('<div style="background-color: #8B0000; color: white; padding: 10px; text-align: center; border-radius: 5px;"><b>0-7 days</b><br>(Critical)</div>', unsafe_allow_html=True)
-            with col2:
-                st.markdown('<div style="background-color: #FFA500; color: white; padding: 10px; text-align: center; border-radius: 5px;"><b>7-15 days</b><br>(Low)</div>', unsafe_allow_html=True)
-            with col3:
-                st.markdown('<div style="background-color: #228B22; color: white; padding: 10px; text-align: center; border-radius: 5px;"><b>15-30 days</b><br>(Good)</div>', unsafe_allow_html=True)
-            with col4:
-                st.markdown('<div style="background-color: #DAA520; color: white; padding: 10px; text-align: center; border-radius: 5px;"><b>30-45 days</b><br>(Optimal)</div>', unsafe_allow_html=True)
-            with col5:
-                st.markdown('<div style="background-color: #4169E1; color: white; padding: 10px; text-align: center; border-radius: 5px;"><b>45-60 days</b><br>(High)</div>', unsafe_allow_html=True)
-            with col6:
-                st.markdown('<div style="background-color: #8B4513; color: white; padding: 10px; text-align: center; border-radius: 5px;"><b>60-90 days</b><br>(Excess)</div>', unsafe_allow_html=True)
-
-            st.markdown("---")
-
-            # Display results in tabs
-            tab1, tab2, tab3 = st.tabs(["📊 Business Report", "📦 RIS Analysis", "📈 Summary Statistics"])
-
-            with tab1:
-                st.subheader("Processed Business Report")
-
-                # Use Styler.apply for DOC column styling to avoid deprecated applymap
-                if 'DOC' in Business_Report.columns:
-                    styled_df = Business_Report.style.apply(
-                        lambda col: [color_doc_column(v) for v in col] if col.name == 'DOC' else [''] * len(col),
-                        axis=0
-                    )
-                else:
-                    styled_df = Business_Report.style
-
-                # Show in-app table
-                st.dataframe(styled_df, use_container_width=True)
-
-                # CSV download
-                csv = Business_Report.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="⬇️ Download Business Report CSV",
-                    data=csv,
-                    file_name="processed_business_report.csv",
-                    mime="text/csv"
-                )
-
-                # Excel download (with DOC formatting)
-                st.download_button(
-                    label="⬇️ Download Business Report (Excel with DOC formatting)",
-                    data=excel_bytes,
-                    file_name="processed_business_report_with_DOC_formatting.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-
-            with tab2:
-                st.subheader("RIS Pivot Analysis")
-                st.dataframe(pivot_sorted, use_container_width=True)
-
-                csv_pivot = pivot_sorted.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="⬇️ Download RIS Pivot CSV",
-                    data=csv_pivot,
-                    file_name="ris_pivot_analysis.csv",
-                    mime="text/csv"
-                )
-
-            with tab3:
-                st.subheader("Summary Statistics")
-
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Total Products", len(Business_Report))
-                with col2:
-                    st.metric("Create PO Items", int(len(Business_Report[Business_Report['PO State'] == 'Create A PO'])))
-                with col3:
-                    st.metric("In Stock Items", int(len(Business_Report[Business_Report['PO State'] == 'We Have Stock'])))
-                with col4:
-                    avg_doc = Business_Report['DOC'].mean()
-                    st.metric("Avg DOC", f"{avg_doc:.2f}" if pd.notna(avg_doc) else "N/A")
-
-                # DOC Distribution by Category
-                st.subheader("DOC Distribution by Category")
-                doc_bins = [0, 7, 15, 30, 45, 60, 90, float('inf')]
-                doc_labels = ['0-7 (Critical)', '7-15 (Low)', '15-30 (Good)', '30-45 (Optimal)', '45-60 (High)', '60-90 (Excess)', '90+ (Excess)']
-                doc_categories = pd.cut(
-                    Business_Report['DOC'].fillna(-1),
-                    bins=doc_bins,
-                    labels=doc_labels,
-                    include_lowest=True
-                )
-                doc_dist = doc_categories.value_counts().reindex(doc_labels).fillna(0).astype(int)
-                st.bar_chart(doc_dist)
-
-                st.subheader("PO State Distribution")
-                po_dist = Business_Report['PO State'].value_counts()
-                st.bar_chart(po_dist)
-
-                st.subheader("Top 10 Products by DRR")
-                if 'DRR' in Business_Report.columns:
-                    top_products = Business_Report.nlargest(10, 'DRR')[['Title', 'DRR', 'Current Stock', 'DOC']].copy()
-                    # style DOC column
-                    if 'DOC' in top_products.columns:
-                        styled_top = top_products.style.apply(
-                            lambda col: [color_doc_column(v) for v in col] if col.name == 'DOC' else [''] * len(col),
-                            axis=0
-                        )
-                    else:
-                        styled_top = top_products.style
-                    st.dataframe(styled_top, use_container_width=True)
-
-                # Critical Items (DOC <= 7)
-                critical_items = Business_Report[pd.to_numeric(Business_Report['DOC'], errors='coerce') <= 7]
-                if len(critical_items) > 0:
-                    st.subheader(f"⚠️ Critical Items (DOC ≤ 7 days) - {len(critical_items)} items")
-                    critical_display = critical_items[['SKU', 'Title', 'Brand', 'Current Stock', 'DRR', 'DOC', 'PO State']].head(100)
-                    if 'DOC' in critical_display.columns:
-                        styled_critical = critical_display.style.apply(
-                            lambda col: [color_doc_column(v) for v in col] if col.name == 'DOC' else [''] * len(col),
-                            axis=0
-                        )
-                    else:
-                        styled_critical = critical_display.style
-                    st.dataframe(styled_critical, use_container_width=True)
-
-        except Exception as e:
-            st.error(f"❌ An error occurred: {str(e)}")
-            st.exception(e)
+with st.sidebar:
+    st.header("📁 Upload Files")
+    
+    business_report_file = st.file_uploader(
+        "Business Report CSV", 
+        type=['csv'],
+        help="BusinessReport.csv"
+    )
+    
+    pm_file = st.file_uploader(
+        "Purchase Master (PM.xlsx)", 
+        type=['xlsx', 'xls'],
+        help="Contains ASIN, SKU, Brand information"
+    )
+    
+    inventory_file = st.file_uploader(
+        "Inventory CSV", 
+        type=['csv'],
+        help="Current stock levels from Amazon"
+    )
+    
+    ris_file = st.file_uploader(
+        "RIS Data (processed_ris_data.xlsx)", 
+        type=['xlsx', 'xls'],
+        help="Regional Inventory Storage data"
+    )
+    
+    state_fc_file = st.file_uploader(
+        "State FC Cluster (Excel)", 
+        type=['xlsx', 'xls'],
+        help="Fulfillment center to state mapping"
+    )
+    
+    st.divider()
+    
+    days = st.number_input(
+        "Number of Days for Analysis",
+        min_value=1,
+        max_value=365,
+        value=90,
+        help="Used to calculate DRR and DOC"
+    )
+    
+    st.divider()
+    
+    process_button = st.button("🔄 Process Data", type="primary", use_container_width=True)
+
+# Main processing logic
+if process_button:
+    if not all([business_report_file, pm_file, inventory_file, ris_file, state_fc_file]):
+        st.error("⚠️ Please upload all required files!")
     else:
-        st.warning("⚠️ Please upload all required files before processing")
+        try:
+            with st.spinner("Processing data... Please wait..."):
+                # Load Business Report
+                business_report = pd.read_csv(business_report_file)
+                
+                # Clean and prepare data
+                business_report["Total Order Items"] = (
+                    business_report["Total Order Items"]
+                    .astype(str)
+                    .str.replace(",", "", regex=False)
+                    .astype(float)
+                )
+                
+                business_report["Total Order Items - B2B"] = (
+                    business_report["Total Order Items - B2B"]
+                    .astype(str)
+                    .str.replace(",", "", regex=False)
+                    .astype(float)
+                )
+                
+                # Create Business Pivot
+                business_pivot = pd.pivot_table(
+                    business_report,
+                    index=["SKU", "(Child) ASIN"],
+                    values=["Total Order Items", "Total Order Items - B2B"],
+                    aggfunc="sum"
+                ).reset_index()
+                
+                business_pivot["Total Sales"] = (
+                    business_pivot["Total Order Items"] + 
+                    business_pivot["Total Order Items - B2B"]
+                )
+                
+                # Load PM file
+                pm = pd.read_excel(pm_file)
+                
+                # Map PM data
+                vendor_sku_map = pm.set_index("ASIN")["Vendor SKU Codes"].to_dict()
+                brand_map = pm.set_index("ASIN")["Brand"].to_dict()
+                brand_manager_map = pm.set_index("ASIN")["Brand Manager"].to_dict()
+                
+                business_pivot["Vendor SKU Codes"] = business_pivot["(Child) ASIN"].map(vendor_sku_map)
+                business_pivot["Brand"] = business_pivot["(Child) ASIN"].map(brand_map)
+                business_pivot["Brand Manager"] = business_pivot["(Child) ASIN"].map(brand_manager_map)
+                
+                # Load Inventory
+                inventory = pd.read_csv(inventory_file)
+                
+                inventory["afn-fulfillable-quantity"] = pd.to_numeric(
+                    inventory["afn-fulfillable-quantity"], errors="coerce"
+                ).fillna(0)
+                
+                inventory["afn-reserved-quantity"] = pd.to_numeric(
+                    inventory["afn-reserved-quantity"], errors="coerce"
+                ).fillna(0)
+                
+                inventory_pivot = pd.pivot_table(
+                    inventory,
+                    index="asin",
+                    values=["afn-fulfillable-quantity", "afn-reserved-quantity"],
+                    aggfunc="sum"
+                ).reset_index()
+                
+                inventory_pivot["Total Stock"] = (
+                    inventory_pivot["afn-fulfillable-quantity"] +
+                    inventory_pivot["afn-reserved-quantity"]
+                )
+                
+                # Map inventory data
+                afn_fulfillable_lookup = inventory_pivot.set_index("asin")["afn-fulfillable-quantity"].to_dict()
+                afn_reserved_lookup = inventory_pivot.set_index("asin")["afn-reserved-quantity"].to_dict()
+                stock_lookup = inventory_pivot.set_index("asin")["Total Stock"].to_dict()
+                
+                business_pivot["afn-fulfillable-quantity"] = business_pivot["(Child) ASIN"].map(afn_fulfillable_lookup)
+                business_pivot["afn-reserved-quantity"] = business_pivot["(Child) ASIN"].map(afn_reserved_lookup)
+                business_pivot["Total Stock"] = business_pivot["(Child) ASIN"].map(stock_lookup)
+                
+                # Calculate DRR and DOC
+                business_pivot["DRR"] = business_pivot["Total Sales"] / days
+                business_pivot["DRR"] = business_pivot["DRR"].replace(0, 0.0001)
+                business_pivot["DOC"] = business_pivot["Total Stock"] / business_pivot["DRR"]
+                business_pivot["DRR"] = business_pivot["DRR"].round(2)
+                business_pivot["DOC"] = business_pivot["DOC"].round(1)
+                
+                # Load RIS Data
+                ris_data = pd.read_excel(ris_file)
+                
+                ris_data["Shipped Quantity"] = pd.to_numeric(
+                    ris_data["Shipped Quantity"], errors="coerce"
+                ).fillna(0)
+                
+                asin_fc_ris_pivot = pd.pivot_table(
+                    ris_data,
+                    index=["ASIN", "FC Cluster"],
+                    columns="RIS Status",
+                    values="Shipped Quantity",
+                    aggfunc="sum",
+                    fill_value=0
+                ).reset_index()
+                
+                # RIS High Cluster (sorted by RIS descending)
+                if "RIS" in asin_fc_ris_pivot.columns:
+                    ris_high = asin_fc_ris_pivot.sort_values("RIS", ascending=False)
+                    ris_high_cluster_map = ris_high.set_index("ASIN")["FC Cluster"].to_dict()
+                    ris_qty_map = ris_high.set_index("ASIN")["RIS"].to_dict()
+                    
+                    business_pivot["RIS High Cluster"] = business_pivot["(Child) ASIN"].map(ris_high_cluster_map)
+                    business_pivot["RIS Qty"] = business_pivot["(Child) ASIN"].map(ris_qty_map)
+                    business_pivot["RIS Qty"] = business_pivot["RIS Qty"].fillna(0)
+                    business_pivot["RIS High Cluster"] = business_pivot["RIS High Cluster"].fillna("")
+                
+                # RIS Low Cluster (sorted by Non RIS descending)
+                if "Non RIS" in asin_fc_ris_pivot.columns:
+                    ris_low = asin_fc_ris_pivot.sort_values("Non RIS", ascending=False)
+                    ris_low_cluster_map = ris_low.set_index("ASIN")["FC Cluster"].to_dict()
+                    ris_low_qty_map = ris_low.set_index("ASIN")["Non RIS"].to_dict()
+                    
+                    business_pivot["RIS Low Cluster"] = business_pivot["(Child) ASIN"].map(ris_low_cluster_map)
+                    business_pivot["RIS Low Qty"] = business_pivot["(Child) ASIN"].map(ris_low_qty_map)
+                    business_pivot["RIS Low Qty"] = business_pivot["RIS Low Qty"].fillna(0)
+                    business_pivot["RIS Low Cluster"] = business_pivot["RIS Low Cluster"].fillna("")
+                
+                # Load State FC mapping
+                state_fc = pd.read_excel(state_fc_file, sheet_name="Sheet1")
+                ris_state_map = state_fc.set_index("Cluster")["State"].to_dict()
+                
+                business_pivot["RIS State"] = business_pivot["RIS High Cluster"].map(ris_state_map)
+                business_pivot["RIS State"] = business_pivot["RIS State"].fillna("")
+                
+                business_pivot["RIS Low State"] = business_pivot["RIS Low Cluster"].map(ris_state_map)
+                business_pivot["RIS Low State"] = business_pivot["RIS Low State"].fillna("")
+                
+                # Create PO State
+                business_pivot["PO State"] = business_pivot["DOC"].apply(
+                    lambda x: "Create A PO" if x <= 7 else "We have Stock"
+                )
+                
+                # Reorder columns
+                column_order = [
+                    "SKU", "(Child) ASIN", "Vendor SKU Codes", "Brand", "Brand Manager",
+                    "Total Order Items", "Total Order Items - B2B", "Total Sales",
+                    "afn-fulfillable-quantity", "afn-reserved-quantity", "Total Stock",
+                    "DRR", "DOC", "RIS High Cluster", "RIS Qty", "RIS State",
+                    "RIS Low Cluster", "RIS Low Qty", "RIS Low State", "PO State"
+                ]
+                
+                business_pivot = business_pivot[column_order]
+                
+                st.session_state.business_pivot = business_pivot
+                st.session_state.processed = True
+                
+                st.success("✅ Data processed successfully!")
+                st.rerun()
+                
+        except Exception as e:
+            st.error(f"❌ Error processing data: {str(e)}")
+            st.exception(e)
 
+# Display results
+if st.session_state.processed and st.session_state.business_pivot is not None:
+    df = st.session_state.business_pivot
+    
+    # Summary metrics
+    st.header("📊 Summary Metrics")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total Products", len(df))
+    
+    with col2:
+        needs_po = len(df[df["PO State"] == "Create A PO"])
+        st.metric("Need Purchase Order", needs_po, delta=f"{(needs_po/len(df)*100):.1f}%")
+    
+    with col3:
+        has_stock = len(df[df["PO State"] == "We have Stock"])
+        st.metric("Has Adequate Stock", has_stock, delta=f"{(has_stock/len(df)*100):.1f}%")
+    
+    with col4:
+        avg_doc = df["DOC"].mean()
+        st.metric("Avg Days of Coverage", f"{avg_doc:.1f}")
+    
+    st.divider()
+    
+    # Tabs for different views
+    tab1, tab2, tab3 = st.tabs(["📋 All Products", "⚠️ Low Stock Alert", "🗺️ RIS Analysis"])
+    
+    with tab1:
+        st.subheader("All Products Data")
+        
+        # Filters
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            brands = ["All"] + sorted(df["Brand"].dropna().unique().tolist())
+            selected_brand = st.selectbox("Filter by Brand", brands)
+        
+        with col2:
+            managers = ["All"] + sorted(df["Brand Manager"].dropna().unique().tolist())
+            selected_manager = st.selectbox("Filter by Brand Manager", managers)
+        
+        with col3:
+            po_states = ["All", "Create A PO", "We have Stock"]
+            selected_po = st.selectbox("Filter by PO State", po_states)
+        
+        # Apply filters
+        filtered_df = df.copy()
+        
+        if selected_brand != "All":
+            filtered_df = filtered_df[filtered_df["Brand"] == selected_brand]
+        
+        if selected_manager != "All":
+            filtered_df = filtered_df[filtered_df["Brand Manager"] == selected_manager]
+        
+        if selected_po != "All":
+            filtered_df = filtered_df[filtered_df["PO State"] == selected_po]
+        
+        st.dataframe(filtered_df, use_container_width=True, height=400)
+        
+        # Download button for All Products
+        st.divider()
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            all_products_output = BytesIO()
+            with pd.ExcelWriter(all_products_output, engine='openpyxl') as writer:
+                filtered_df.to_excel(writer, sheet_name='All Products', index=False)
+            all_products_output.seek(0)
+            
+            st.download_button(
+                label="📥 Download All Products Report (Excel)",
+                data=all_products_output,
+                file_name=f"all_products_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True
+            )
+    
+    with tab2:
+        st.subheader("⚠️ Products Requiring Purchase Orders (DOC ≤ 7)")
+        
+        low_stock = df[df["PO State"] == "Create A PO"].sort_values("DOC")
+        
+        if len(low_stock) > 0:
+            st.warning(f"Found {len(low_stock)} products that need purchase orders!")
+            
+            # Show critical items (DOC = 0)
+            critical = low_stock[low_stock["DOC"] == 0]
+            if len(critical) > 0:
+                st.error(f"🚨 {len(critical)} products have ZERO stock!")
+                st.dataframe(
+                    critical[["SKU", "(Child) ASIN", "Brand", "Total Stock", "DRR", "DOC", "RIS State"]],
+                    use_container_width=True
+                )
+            
+            st.divider()
+            st.write("All Low Stock Items:")
+            st.dataframe(low_stock, use_container_width=True, height=400)
+            
+            # Download button for Low Stock
+            st.divider()
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                low_stock_output = BytesIO()
+                with pd.ExcelWriter(low_stock_output, engine='openpyxl') as writer:
+                    low_stock.to_excel(writer, sheet_name='Low Stock Items', index=False)
+                    if len(critical) > 0:
+                        critical.to_excel(writer, sheet_name='Zero Stock Critical', index=False)
+                low_stock_output.seek(0)
+                
+                st.download_button(
+                    label="📥 Download Low Stock Report (Excel)",
+                    data=low_stock_output,
+                    file_name=f"low_stock_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    use_container_width=True
+                )
+        else:
+            st.success("✅ All products have adequate stock!")
+    
+    with tab3:
+        st.subheader("🗺️ RIS (Regional Inventory Storage) Analysis")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("**Top RIS Clusters (Highest RIS Quantity)**")
+            ris_high_summary = df.groupby("RIS High Cluster")["RIS Qty"].sum().sort_values(ascending=False).head(10)
+            st.dataframe(ris_high_summary, use_container_width=True)
+        
+        with col2:
+            st.write("**Top Non-RIS Clusters (Highest Non-RIS Quantity)**")
+            ris_low_summary = df.groupby("RIS Low Cluster")["RIS Low Qty"].sum().sort_values(ascending=False).head(10)
+            st.dataframe(ris_low_summary, use_container_width=True)
+        
+        st.divider()
+        
+        st.write("**RIS by State**")
+        state_summary = df.groupby("RIS State").agg({
+            "RIS Qty": "sum",
+            "(Child) ASIN": "count"
+        }).sort_values("RIS Qty", ascending=False)
+        state_summary.columns = ["Total RIS Quantity", "Number of Products"]
+        st.dataframe(state_summary, use_container_width=True)
+        
+        st.divider()
+        
+        st.write("**Detailed RIS Data by Product**")
+        ris_detailed = df[df["RIS High Cluster"] != ""][["SKU", "(Child) ASIN", "Brand", "Brand Manager", "RIS High Cluster", "RIS Qty", "RIS State", "RIS Low Cluster", "RIS Low Qty", "RIS Low State"]]
+        st.dataframe(ris_detailed, use_container_width=True, height=300)
+        
+        # Download button for RIS Analysis
+        st.divider()
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            ris_output = BytesIO()
+            with pd.ExcelWriter(ris_output, engine='openpyxl') as writer:
+                ris_detailed.to_excel(writer, sheet_name='RIS Detailed', index=False)
+                
+                ris_cluster_summary = df.groupby("RIS High Cluster").agg({
+                    "RIS Qty": "sum",
+                    "(Child) ASIN": "count"
+                }).reset_index()
+                ris_cluster_summary.columns = ["Cluster", "Total RIS Qty", "Product Count"]
+                ris_cluster_summary.to_excel(writer, sheet_name='RIS Cluster Summary', index=False)
+                
+                state_summary_export = df.groupby("RIS State").agg({
+                    "RIS Qty": "sum",
+                    "(Child) ASIN": "count"
+                }).reset_index()
+                state_summary_export.columns = ["State", "Total RIS Qty", "Product Count"]
+                state_summary_export.to_excel(writer, sheet_name='RIS State Summary', index=False)
+            ris_output.seek(0)
+            
+            st.download_button(
+                label="📥 Download RIS Analysis Report (Excel)",
+                data=ris_output,
+                file_name=f"ris_analysis_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True
+            )
+    
 else:
-    st.info("👈 Upload all required files in the sidebar and click 'Process Reports' to begin")
-
-    # Instructions
-    st.markdown("### 📋 Instructions")
+    # Welcome screen
+    st.info("👈 Please upload all required files in the sidebar and click 'Process Data' to begin analysis.")
+    
     st.markdown("""
-    1. Upload the following files in the sidebar:
-        - **Business Report CSV**: Your main business report
-        - **Product Master Excel**: Product master data (PM.xlsx)
-        - **Inventory CSV**: Inventory data
-        - **RIS CSV**: RIS order data
-        - **FC State Cluster Excel**: Fulfillment center and state mapping
-    2. Set the **Number of Days** for DRR calculation (default: 30)
-    3. Click **Process Reports** to generate the analysis
-    4. View results in different tabs and download processed files
-
-    ### 📊 Output Features
-    - Brand Manager and Brand mapping
-    - Current and Reserve Stock levels
-    - Daily Run Rate (DRR) calculation
-    - Days of Coverage (DOC) calculation
-    - RIS (Regional In-State) analysis
-    - PO recommendations
-    - Case Pack information
+    ### 📝 Analysis Overview
+    
+    This application will:
+    
+    1. **Calculate Key Metrics:**
+       - DRR (Daily Run Rate) = Total Sales / Number of Days
+       - DOC (Days of Coverage) = Total Stock / DRR
+       - Identify products needing purchase orders (DOC ≤ 7)
+    
+    2. **RIS Analysis:**
+       - Identify highest RIS clusters
+       - Map regional inventory distribution
+       - Analyze Non-RIS patterns
+    
+    3. **Generate Reports:**
+       - Complete inventory analysis
+       - Low stock alerts
+       - Regional distribution insights
+    
+    ### 📂 Required Files:
+    - Business Report CSV (3-month sales data)
+    - Purchase Master Excel (PM.xlsx with ASIN, SKU, Brand info)
+    - Inventory CSV (current stock levels)
+    - RIS Data Excel (regional inventory storage)
+    - State FC Cluster Excel (fulfillment center mapping)
     """)
-
