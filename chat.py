@@ -557,18 +557,23 @@ if st.session_state.processed and st.session_state.business_pivot is not None:
         
         st.divider()
         
-        st.write("**RIS by State**")
-        state_summary = df.groupby("RIS State").agg({
-            "RIS Qty": "sum",
-            "(Child) ASIN": "count"
-        }).sort_values("RIS Qty", ascending=False)
-        state_summary.columns = ["Total RIS Quantity", "Number of Products"]
-        st.dataframe(state_summary, use_container_width=True)
-        
-        st.divider()
+        if "RIS State" in df.columns and df["RIS State"].any():
+            st.write("**RIS by State**")
+            state_summary = df.groupby("RIS State").agg({
+                "RIS Qty": "sum",
+                "(Child) ASIN": "count"
+            }).sort_values("RIS Qty", ascending=False)
+            state_summary.columns = ["Total RIS Quantity", "Number of Products"]
+            st.dataframe(state_summary, use_container_width=True)
+            st.divider()
         
         st.write("**Detailed RIS Data by Product**")
-        ris_detailed = df[df["RIS Cluster"] != ""][["SKU", "(Child) ASIN", "Brand", "Brand Manager", "RIS Cluster", "RIS Qty", "RIS State", "Non RIS Cluster", "Non RIS Qty", "Non RIS State"]]
+        
+        # Dynamic column selection for RIS details
+        ris_ideal_cols = ["SKU", "(Child) ASIN", "Brand", "Brand Manager", "RIS Cluster", "RIS Qty", "RIS State", "Non RIS Cluster", "Non RIS Qty", "Non RIS State"]
+        ris_display_cols = [c for c in ris_ideal_cols if c in df.columns]
+        
+        ris_detailed = df[df["RIS Cluster"] != ""][ris_display_cols]
         st.dataframe(ris_detailed, use_container_width=True, height=300)
         
         # Download button for RIS Analysis
@@ -586,12 +591,13 @@ if st.session_state.processed and st.session_state.business_pivot is not None:
                 ris_cluster_summary.columns = ["Cluster", "Total RIS Qty", "Product Count"]
                 ris_cluster_summary.to_excel(writer, sheet_name='RIS Cluster Summary', index=False)
                 
-                state_summary_export = df.groupby("RIS State").agg({
-                    "RIS Qty": "sum",
-                    "(Child) ASIN": "count"
-                }).reset_index()
-                state_summary_export.columns = ["State", "Total RIS Qty", "Product Count"]
-                state_summary_export.to_excel(writer, sheet_name='RIS State Summary', index=False)
+                if "RIS State" in df.columns and df["RIS State"].any():
+                    state_summary_export = df.groupby("RIS State").agg({
+                        "RIS Qty": "sum",
+                        "(Child) ASIN": "count"
+                    }).reset_index()
+                    state_summary_export.columns = ["State", "Total RIS Qty", "Product Count"]
+                    state_summary_export.to_excel(writer, sheet_name='RIS State Summary', index=False)
             ris_output.seek(0)
             
             st.download_button(
@@ -634,6 +640,3 @@ else:
     - RIS Data Excel (regional inventory storage)
     - State FC Cluster Excel (fulfillment center mapping)
     """)
-
-
-
