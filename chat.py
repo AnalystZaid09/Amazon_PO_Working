@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import os
 from io import BytesIO
 
 # Page configuration
@@ -104,7 +105,17 @@ with st.sidebar:
             key="m_ris"
         )
         
-        state_fc_file = "State FC Cluster.xlsx"
+        # Check if local file exists
+        if os.path.exists("State FC Cluster.xlsx"):
+            state_fc_file = "State FC Cluster.xlsx"
+            st.success("✅ State FC Cluster file found locally.")
+        else:
+            state_fc_file = st.file_uploader(
+                "State FC Cluster (File not found on server)", 
+                type=['xlsx', 'xls'],
+                help="Please upload State FC Cluster.xlsx since it was not found on the server.",
+                key="m_fc"
+            )
     
     st.divider()
     
@@ -616,3 +627,6 @@ else:
     - RIS Data Excel (regional inventory storage)
     - State FC Cluster Excel (fulfillment center mapping)
     """)
+
+
+
