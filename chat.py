@@ -37,35 +37,74 @@ if 'business_pivot' not in st.session_state:
 with st.sidebar:
     st.header("📁 Upload Files")
     
-    business_report_file = st.file_uploader(
-        "Business Report CSV", 
-        type=['csv'],
-        help="BusinessReport.csv"
-    )
+    role = st.selectbox("Select Role", ["Amazon Manager", "Manager"])
     
-    pm_file = st.file_uploader(
-        "Purchase Master (PM.xlsx)", 
-        type=['xlsx', 'xls'],
-        help="Contains ASIN, SKU, Brand information"
-    )
-    
-    inventory_file = st.file_uploader(
-        "Inventory CSV", 
-        type=['csv'],
-        help="Current stock levels from Amazon"
-    )
-    
-    ris_file = st.file_uploader(
-        "RIS Data (processed_ris_data.xlsx)", 
-        type=['xlsx', 'xls'],
-        help="Regional Inventory Storage data"
-    )
-    
-    state_fc_file = st.file_uploader(
-        "State FC Cluster (Excel)", 
-        type=['xlsx', 'xls'],
-        help="Fulfillment center to state mapping"
-    )
+    if role == "Amazon Manager":
+        business_report_file = st.file_uploader(
+            "Business Report CSV", 
+            type=['csv'],
+            help="BusinessReport.csv",
+            key="am_business"
+        )
+        
+        pm_file = st.file_uploader(
+            "Purchase Master (PM.xlsx)", 
+            type=['xlsx', 'xls'],
+            help="Contains ASIN, SKU, Brand information",
+            key="am_pm"
+        )
+        
+        inventory_file = st.file_uploader(
+            "Inventory CSV", 
+            type=['csv'],
+            help="Current stock levels from Amazon",
+            key="am_inv"
+        )
+        
+        ris_file = st.file_uploader(
+            "RIS Data (processed_ris_data.xlsx)", 
+            type=['xlsx', 'xls'],
+            help="Regional Inventory Storage data",
+            key="am_ris"
+        )
+        
+        state_fc_file = st.file_uploader(
+            "State FC Cluster (Excel)", 
+            type=['xlsx', 'xls'],
+            help="Fulfillment center to state mapping",
+            key="am_fc"
+        )
+        
+    else:  # Manager
+        business_report_file = st.file_uploader(
+            "Business Report", 
+            type=['csv'],
+            help="Business Report File",
+            key="m_business"
+        )
+        
+        pm_file = st.file_uploader(
+            "PM FILE", 
+            type=['xlsx', 'xls'],
+            help="PM File",
+            key="m_pm"
+        )
+        
+        inventory_file = st.file_uploader(
+            "Inventory file", 
+            type=['csv'],
+            help="Inventory File",
+            key="m_inv"
+        )
+        
+        ris_file = st.file_uploader(
+            "Manager RIS processed file", 
+            type=['xlsx', 'xls'],
+            help="Manager RIS Processed File",
+            key="m_ris"
+        )
+        
+        state_fc_file = "State FC Cluster.xlsx"
     
     st.divider()
     
@@ -173,40 +212,140 @@ if process_button:
                 # Load RIS Data
                 ris_data = pd.read_excel(ris_file)
                 
-                ris_data["Shipped Quantity"] = pd.to_numeric(
-                    ris_data["Shipped Quantity"], errors="coerce"
-                ).fillna(0)
-                
-                asin_fc_ris_pivot = pd.pivot_table(
-                    ris_data,
-                    index=["ASIN", "FC Cluster"],
-                    columns="RIS Status",
-                    values="Shipped Quantity",
-                    aggfunc="sum",
-                    fill_value=0
-                ).reset_index()
-                
-                # RIS High Cluster (sorted by RIS descending)
-                if "RIS" in asin_fc_ris_pivot.columns:
-                    ris_high = asin_fc_ris_pivot.sort_values("RIS", ascending=True)
-                    ris_high_cluster_map = ris_high.set_index("ASIN")["FC Cluster"].to_dict()
-                    ris_qty_map = ris_high.set_index("ASIN")["RIS"].to_dict()
+                if role == "Amazon Manager":
+                    ris_data["Shipped Quantity"] = pd.to_numeric(
+                        ris_data["Shipped Quantity"], errors="coerce"
+                    ).fillna(0)
                     
-                    business_pivot["RIS Cluster"] = business_pivot["(Child) ASIN"].map(ris_high_cluster_map)
-                    business_pivot["RIS Qty"] = business_pivot["(Child) ASIN"].map(ris_qty_map)
+                    asin_fc_ris_pivot = pd.pivot_table(
+                        ris_data,
+                        index=["ASIN", "FC Cluster"],
+                        columns="RIS Status",
+                        values="Shipped Quantity",
+                        aggfunc="sum",
+                        fill_value=0
+                    ).reset_index()
+                    
+                    # RIS High Cluster (sorted by RIS descending)
+                    if "RIS" in asin_fc_ris_pivot.columns:
+                        ris_high = asin_fc_ris_pivot.sort_values("RIS", ascending=True)
+                        ris_high_cluster_map = ris_high.set_index("ASIN")["FC Cluster"].to_dict()
+                        ris_qty_map = ris_high.set_index("ASIN")["RIS"].to_dict()
+                        
+                        business_pivot["RIS Cluster"] = business_pivot["(Child) ASIN"].map(ris_high_cluster_map)
+                        business_pivot["RIS Qty"] = business_pivot["(Child) ASIN"].map(ris_qty_map)
+                        business_pivot["RIS Qty"] = business_pivot["RIS Qty"].fillna(0)
+                        business_pivot["RIS Cluster"] = business_pivot["RIS Cluster"].fillna("")
+                    
+                    # RIS Low Cluster (sorted by Non RIS descending)
+                    if "Non RIS" in asin_fc_ris_pivot.columns:
+                        ris_low = asin_fc_ris_pivot.sort_values("Non RIS", ascending=True)
+                        ris_low_cluster_map = ris_low.set_index("ASIN")["FC Cluster"].to_dict()
+                        ris_low_qty_map = ris_low.set_index("ASIN")["Non RIS"].to_dict()
+                        
+                        business_pivot["Non RIS Cluster"] = business_pivot["(Child) ASIN"].map(ris_low_cluster_map)
+                        business_pivot["Non RIS Qty"] = business_pivot["(Child) ASIN"].map(ris_low_qty_map)
+                        business_pivot["Non RIS Qty"] = business_pivot["Non RIS Qty"].fillna(0)
+                        business_pivot["Non RIS Cluster"] = business_pivot["Non RIS Cluster"].fillna("")
+                        
+                else: # Manager
+                    # Normalize columns to handle variations
+                    ris_data.columns = ris_data.columns.str.strip()
+                    
+                    # Handle specific column renaming if needed
+                    col_map = {
+                        "Non RIS": "non_ris",
+                        "non ris": "non_ris",
+                        "RIS Units": "ris_units",
+                        "Total Units": "total_units",
+                        "ASIN": "asin", # Normalize ASIN to asin
+                        "Asin": "asin"
+                    }
+                    ris_data = ris_data.rename(columns=col_map)
+                    
+                    # Clean data ensures columns exist and are numeric
+                    if "ris_units" not in ris_data.columns:
+                        st.error(f"Column 'ris_units' not found. Available columns: {list(ris_data.columns)}")
+                        st.stop()
+                    
+                    # Ensure asin column exists
+                    if "asin" not in ris_data.columns:
+                        st.error(f"Column 'asin' (or 'ASIN') not found. Available columns: {list(ris_data.columns)}")
+                        st.stop()
+                        
+                    ris_data["ris_units"] = pd.to_numeric(ris_data["ris_units"], errors="coerce").fillna(0)
+                    
+                    # Handle non_ris specifically
+                    if "non_ris" not in ris_data.columns:
+                        # Try to find it case-insensitive
+                        found = False
+                        for col in ris_data.columns:
+                            if col.lower().replace(" ", "") == "nonris":
+                                ris_data = ris_data.rename(columns={col: "non_ris"})
+                                found = True
+                                break
+                        if not found:
+                             st.error(f"Column 'Non RIS' (or 'non_ris') not found. Available columns: {list(ris_data.columns)}")
+                             st.stop()
+
+                    ris_data["non_ris"] = pd.to_numeric(ris_data["non_ris"], errors="coerce").fillna(0)
+                    ris_data["total_units"] = pd.to_numeric(ris_data["total_units"], errors="coerce").fillna(0)
+                    
+                    # Normalize ASINs for mapping
+                    ris_data["asin"] = ris_data["asin"].astype(str).str.strip().str.upper()
+                    
+                    # Create pivot: rows=asin,cust_cluster, values=sum(ris, non_ris, total)
+                    manager_pivot = pd.pivot_table(
+                        ris_data,
+                        index=["asin", "cust_cluster"],
+                        values=["ris_units", "non_ris", "total_units"],
+                        aggfunc="sum"
+                    ).reset_index()
+                    
+                    # Sort by RIS Units descending to get the top RIS cluster for each ASIN
+                    ris_high = manager_pivot.sort_values("ris_units", ascending=False)
+                    ris_high_dedup = ris_high.drop_duplicates(subset=["asin"], keep="first")
+                    
+                    ris_high_cluster_map = ris_high_dedup.set_index("asin")["cust_cluster"].to_dict()
+                    ris_qty_map = ris_high_dedup.set_index("asin")["ris_units"].to_dict()
+                    
+                    # Ensure business_pivot keys match
+                    business_pivot["_mapping_key"] = business_pivot["(Child) ASIN"].astype(str).str.strip().str.upper()
+                    
+                    business_pivot["RIS Cluster"] = business_pivot["_mapping_key"].map(ris_high_cluster_map)
+                    business_pivot["RIS Qty"] = business_pivot["_mapping_key"].map(ris_qty_map)
                     business_pivot["RIS Qty"] = business_pivot["RIS Qty"].fillna(0)
                     business_pivot["RIS Cluster"] = business_pivot["RIS Cluster"].fillna("")
-                
-                # RIS Low Cluster (sorted by Non RIS descending)
-                if "Non RIS" in asin_fc_ris_pivot.columns:
-                    ris_low = asin_fc_ris_pivot.sort_values("Non RIS", ascending=True)
-                    ris_low_cluster_map = ris_low.set_index("ASIN")["FC Cluster"].to_dict()
-                    ris_low_qty_map = ris_low.set_index("ASIN")["Non RIS"].to_dict()
+
+                    # For Non RIS Cluster & Qty
+                    ris_low = manager_pivot.sort_values("non_ris", ascending=False)
+                    ris_low_dedup = ris_low.drop_duplicates(subset=["asin"], keep="first")
                     
-                    business_pivot["Non RIS Cluster"] = business_pivot["(Child) ASIN"].map(ris_low_cluster_map)
-                    business_pivot["Non RIS Qty"] = business_pivot["(Child) ASIN"].map(ris_low_qty_map)
+                    ris_low_cluster_map = ris_low_dedup.set_index("asin")["cust_cluster"].to_dict()
+                    ris_low_qty_map = ris_low_dedup.set_index("asin")["non_ris"].to_dict()
+                    
+                    business_pivot["Non RIS Cluster"] = business_pivot["_mapping_key"].map(ris_low_cluster_map)
+                    business_pivot["Non RIS Qty"] = business_pivot["_mapping_key"].map(ris_low_qty_map)
                     business_pivot["Non RIS Qty"] = business_pivot["Non RIS Qty"].fillna(0)
                     business_pivot["Non RIS Cluster"] = business_pivot["Non RIS Cluster"].fillna("")
+                    
+                    # Map Total Units as well (Requested implicitly by user mentioning values)
+                    # We can take total units from the highest RIS cluster row, or sum of all? 
+                    # Usually "Vlookup" implies taking from the same row we got the cluster from. 
+                    # Let's map Total Units from the RIS High row.
+                    ris_total_map = ris_high_dedup.set_index("asin")["total_units"].to_dict()
+                    business_pivot["Total RIS Units"] = business_pivot["_mapping_key"].map(ris_total_map).fillna(0) # Rename to differentiate from mapped stock? Or just Total RIS File Units
+                    
+                    # Debugging: Check match rate
+                    bp_asins = set(business_pivot["_mapping_key"].unique())
+                    ris_asins = set(ris_high_cluster_map.keys())
+                    matches = bp_asins.intersection(ris_asins)
+                    
+                    st.info(f"debug: Manager Mode. Found {len(ris_asins)} distinct ASINs in RIS File. Matched {len(matches)} with Business Report.")
+                    
+                    # Cleanup temp key
+                    if "_mapping_key" in business_pivot.columns:
+                        business_pivot = business_pivot.drop(columns=["_mapping_key"])
                 
                 # Load State FC mapping
                 state_fc = pd.read_excel(state_fc_file, sheet_name="Sheet1")
@@ -224,13 +363,30 @@ if process_button:
                 )
                 
                 # Reorder columns
-                column_order = [
-                    "SKU", "(Child) ASIN", "Vendor SKU Codes", "Brand", "Brand Manager",
-                    "Total Order Items", "Total Order Items - B2B", "Total Sales",
-                    "afn-fulfillable-quantity", "afn-reserved-quantity", "Total Stock",
-                    "DRR", "DOC", "RIS Cluster", "RIS Qty", "RIS State",
-                    "Non RIS Cluster", "Non RIS Qty", "Non RIS State", "PO State"
-                ]
+                if role == "Manager":
+                    column_order = [
+                        "SKU", "(Child) ASIN", "Vendor SKU Codes", "Brand", "Brand Manager",
+                        "Total Order Items", "Total Order Items - B2B", "Total Sales",
+                        "afn-fulfillable-quantity", "afn-reserved-quantity", "Total Stock",
+                        "DRR", "DOC", 
+                        "RIS Qty", "RIS Cluster", "Non RIS Cluster", "Non RIS Qty", 
+                        "PO State"
+                    ]
+                    # Note: User didn't request State columns or Total RIS Units for Manager specific view.
+                    # Keeping it minimal as requested.
+                else:
+                    column_order = [
+                        "SKU", "(Child) ASIN", "Vendor SKU Codes", "Brand", "Brand Manager",
+                        "Total Order Items", "Total Order Items - B2B", "Total Sales",
+                        "afn-fulfillable-quantity", "afn-reserved-quantity", "Total Stock",
+                        "DRR", "DOC", "RIS Cluster", "RIS Qty", "RIS State",
+                        "Non RIS Cluster", "Non RIS Qty", "Non RIS State", "PO State"
+                    ]
+                
+                # Ensure all columns exist
+                for col in column_order:
+                    if col not in business_pivot.columns:
+                        business_pivot[col] = 0 if "Qty" in col or "Units" in col else ""
                 
                 business_pivot = business_pivot[column_order]
                 
@@ -460,7 +616,3 @@ else:
     - RIS Data Excel (regional inventory storage)
     - State FC Cluster Excel (fulfillment center mapping)
     """)
-
-
-
-
