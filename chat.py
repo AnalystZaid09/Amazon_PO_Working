@@ -504,8 +504,13 @@ if st.session_state.processed and st.session_state.business_pivot is not None:
             critical = low_stock[low_stock["DOC"] == 0]
             if len(critical) > 0:
                 st.error(f"🚨 {len(critical)} products have ZERO stock!")
+                # Define desired columns
+                desired_cols = ["SKU", "(Child) ASIN", "Brand", "Total Stock", "DRR", "DOC", "RIS State"]
+                # Intersect with available columns to avoid KeyError
+                display_cols = [col for col in desired_cols if col in critical.columns]
+                
                 st.dataframe(
-                    critical[["SKU", "(Child) ASIN", "Brand", "Total Stock", "DRR", "DOC", "RIS State"]],
+                    critical[display_cols],
                     use_container_width=True
                 )
             
