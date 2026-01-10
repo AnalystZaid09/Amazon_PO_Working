@@ -105,17 +105,8 @@ with st.sidebar:
             key="m_ris"
         )
         
-        # Check if local file exists
-        if os.path.exists("State FC Cluster.xlsx"):
-            state_fc_file = "State FC Cluster.xlsx"
-            st.success("✅ State FC Cluster file found locally.")
-        else:
-            state_fc_file = st.file_uploader(
-                "State FC Cluster (File not found on server)", 
-                type=['xlsx', 'xls'],
-                help="Please upload State FC Cluster.xlsx since it was not found on the server.",
-                key="m_fc"
-            )
+        # State FC File not needed for Manager
+        state_fc_file = None
     
     st.divider()
     
@@ -133,7 +124,12 @@ with st.sidebar:
 
 # Main processing logic
 if process_button:
-    if not all([business_report_file, pm_file, inventory_file, ris_file, state_fc_file]):
+    # Determine required files based on role
+    required_files = [business_report_file, pm_file, inventory_file, ris_file]
+    if role == "Amazon Manager":
+        required_files.append(state_fc_file)
+        
+    if not all(required_files):
         st.error("⚠️ Please upload all required files!")
     else:
         try:
@@ -359,14 +355,20 @@ if process_button:
                         business_pivot = business_pivot.drop(columns=["_mapping_key"])
                 
                 # Load State FC mapping
-                state_fc = pd.read_excel(state_fc_file, sheet_name="Sheet1")
-                ris_state_map = state_fc.set_index("Cluster")["State"].to_dict()
-                
-                business_pivot["RIS State"] = business_pivot["RIS Cluster"].map(ris_state_map)
-                business_pivot["RIS State"] = business_pivot["RIS State"].fillna("")
-                
-                business_pivot["Non RIS State"] = business_pivot["Non RIS Cluster"].map(ris_state_map)
-                business_pivot["Non RIS State"] = business_pivot["Non RIS State"].fillna("")
+                if role == "Amazon Manager":
+                    state_fc = pd.read_excel(state_fc_file, sheet_name="Sheet1")
+                    ris_state_map = state_fc.set_index("Cluster")["State"].to_dict()
+                    
+                    business_pivot["RIS State"] = business_pivot["RIS Cluster"].map(ris_state_map)
+                    business_pivot["RIS State"] = business_pivot["RIS State"].fillna("")
+                    
+                    business_pivot["Non RIS State"] = business_pivot["Non RIS Cluster"].map(ris_state_map)
+                    business_pivot["Non RIS State"] = business_pivot["Non RIS State"].fillna("")
+                else:
+                    # For Manager, these columns are not in the main column order, 
+                    # but just in case they are referenced somewhere else or standardizing schema
+                    business_pivot["RIS State"] = ""
+                    business_pivot["Non RIS State"] = ""
                 
                 # Create PO State
                 business_pivot["PO State"] = business_pivot["DOC"].apply(
