@@ -38,7 +38,7 @@ if 'business_pivot' not in st.session_state:
 with st.sidebar:
     st.header("📁 Upload Files")
     
-    role = st.selectbox("Select Role", ["Portal", "Manager"])
+    role = st.selectbox("Select Role", ["Portal", "Manager", "RIS Samriddhi"])
     
     if role == "Portal":
         business_report_file = st.file_uploader(
@@ -76,6 +76,38 @@ with st.sidebar:
             key="am_fc"
         )
         
+    elif role == "RIS Samriddhi":
+        business_report_file = st.file_uploader(
+            "Business Report CSV", 
+            type=['csv'],
+            help="BusinessReport.csv",
+            key="rs_business"
+        )
+        
+        pm_file = st.file_uploader(
+            "Purchase Master (PM.xlsx)", 
+            type=['xlsx', 'xls'],
+            help="Contains ASIN, SKU, Brand information",
+            key="rs_pm"
+        )
+        
+        inventory_file = st.file_uploader(
+            "Inventory CSV", 
+            type=['csv'],
+            help="Current stock levels from Amazon",
+            key="rs_inv"
+        )
+        
+        ris_file = st.file_uploader(
+            "Samriddhi RIS Data (Excel)", 
+            type=['xlsx', 'xls'],
+            help="Detailed Samriddhi RIS weekly data",
+            key="rs_ris"
+        )
+        
+        # State FC File not needed for RIS Samriddhi
+        state_fc_file = None
+    
     else:  # Manager
         business_report_file = st.file_uploader(
             "Business Report", 
@@ -128,6 +160,10 @@ if process_button:
     required_files = [business_report_file, pm_file, inventory_file, ris_file]
     if role == "Portal":
         required_files.append(state_fc_file)
+    elif role == "RIS Samriddhi":
+        # Any other required files for Samriddhi? User said "all file", 
+        # so business, pm, inv, and ris are already included in the base list.
+        pass
         
     if not all(required_files):
         st.error("⚠️ Please upload all required files!")
@@ -255,6 +291,134 @@ if process_button:
                         business_pivot["Non RIS Qty"] = business_pivot["Non RIS Qty"].fillna(0)
                         business_pivot["Non RIS Cluster"] = business_pivot["Non RIS Cluster"].fillna("")
                         
+                elif role == "RIS Samriddhi":
+                    # Normalize columns to handle variations
+                    ris_data.columns = ris_data.columns.str.strip()
+                    
+                    # Columns in Samriddhi: ASIN, Amazon Sku Name, Product Name, Brand, Brand Manager, Cluster, ris_week1...ris_week8
+                    # We need to sum the ris_week columns (or use already calculated total_ris_units)
+                    week_cols = [col for col in ris_data.columns if col.lower().startswith('ris_week')]
+                    
+                    if not week_cols and 'total_ris_units' not in [c.lower() for c in ris_data.columns]:
+                        st.warning("⚠️ No 'ris_week' or 'total_ris_units' columns found in Samriddhi file. Using 0 for quantities.")
+                        ris_data['total_ris_units'] = 0
+                    else:
+                        for col in week_cols:
+                            ris_data[col] = pd.to_numeric(ris_data[col], errors='coerce').fillna(0)
+                        
+                        # If the file already has 'total_ris_units', we only calculate if weeks are present
+                        if week_cols:
+                            # Prioritize ris_week12 for RIS Qty as per user request
+                            target_week = next((c for c in week_cols if '12' in c.lower()), None)
+                            if not target_week:
+                                # Fallback to highest numbered week if 12 is not found
+                                sorted_temp = sorted(week_cols, key=lambda x: int(''.join(filter(str.isdigit, x)) or 0), reverse=True)
+                                target_week = sorted_temp[0] if sorted_temp else None
+                            
+                            if target_week:
+                                ris_data['total_ris_units'] = pd.to_numeric(ris_data[target_week], errors='coerce').fillna(0)
+                            else:
+                                ris_data['total_ris_units'] = 0
+                        elif 'total_ris_units' in ris_data.columns:
+                            ris_data['total_ris_units'] = pd.to_numeric(ris_data['total_ris_units'], errors='coerce').fillna(0)
+                        else:
+                            # Try case-insensitive find for total_ris_units
+                            tru_col = next((c for c in ris_data.columns if c.lower() == 'total_ris_units'), None)
+                            if tru_col:
+                                ris_data['total_ris_units'] = pd.to_numeric(ris_data[tru_col], errors='coerce').fillna(0)
+
+                    
+                    # Normalize ASIN column name
+                    asin_col = next((c for c in ris_data.columns if c.lower() == 'asin'), None)
+                    if asin_col:
+                        ris_data = ris_data.rename(columns={asin_col: 'asin'})
+                    
+                    # If we have multiple 'asin' columns (e.g. from renaming or duplicates), keep only the first one
+                    if isinstance(ris_data["asin"], pd.DataFrame):
+                        # Keep only the first 'asin' column and drop others
+                        _asin_series = ris_data["asin"].iloc[:, 0]
+                        ris_data = ris_data.drop(columns=["asin"])
+                        ris_data["asin"] = _asin_series
+                    
+                    # Ensure asin column exists
+                    if 'asin' not in ris_data.columns:
+                        # try to find it case-insensitive
+                        asin_col = next((c for c in ris_data.columns if c.lower() == 'asin'), None)
+                        if asin_col:
+                            ris_data = ris_data.rename(columns={asin_col: 'asin'})
+                        else:
+                            st.error(f"Column 'ASIN' not found in Samriddhi file. Available: {list(ris_data.columns)}")
+                            st.stop()
+                    
+                    # Ensure Cluster column exists
+                    if 'Cluster' not in ris_data.columns:
+                        # try to find it case-insensitive or common variations
+                        options = ['cluster', 'cust_cluster', 'cust cluster', 'region']
+                        cluster_col = next((c for c in ris_data.columns if c.lower() in options), None)
+                        if cluster_col:
+                            ris_data = ris_data.rename(columns={cluster_col: 'Cluster'})
+                        else:
+                            st.error(f"Column 'Cluster' (or 'cust_cluster') not found in Samriddhi file. Available: {list(ris_data.columns)}")
+                            st.stop()
+
+                    # Normalize ASINs for mapping
+                    ris_data["asin"] = ris_data["asin"].astype(str).str.strip().str.upper()
+                    
+                    # Create pivot: rows=asin, Cluster, values=sum(total_ris_units) and also each week
+                    _pivot_values = ["total_ris_units"] + week_cols
+                    samriddhi_pivot = pd.pivot_table(
+                        ris_data,
+                        index=["asin", "Cluster"],
+                        values=_pivot_values,
+                        aggfunc="sum"
+                    ).reset_index()
+                    
+                    # Sort by total_ris_units descending to get the top RIS cluster for each ASIN
+                    ris_high = samriddhi_pivot.sort_values("total_ris_units", ascending=False)
+                    ris_high_dedup = ris_high.drop_duplicates(subset=["asin"], keep="first")
+                    
+                    ris_high_cluster_map = ris_high_dedup.set_index("asin")["Cluster"].to_dict()
+                    ris_qty_map = ris_high_dedup.set_index("asin")["total_ris_units"].to_dict()
+                    
+                    # Map each week column from the top cluster row
+                    week_maps = {}
+                    for col in week_cols:
+                        week_maps[col] = ris_high_dedup.set_index("asin")[col].to_dict()
+                    
+                    # Ensure business_pivot keys match
+                    business_pivot["_mapping_key"] = business_pivot["(Child) ASIN"].astype(str).str.strip().str.upper()
+                    
+                    business_pivot["RIS Cluster"] = business_pivot["_mapping_key"].map(ris_high_cluster_map)
+                    business_pivot["RIS Qty"] = business_pivot["_mapping_key"].map(ris_qty_map)
+                    
+
+                    
+                    business_pivot["RIS Qty"] = business_pivot["RIS Qty"].fillna(0)
+                    business_pivot["RIS Cluster"] = business_pivot["RIS Cluster"].fillna("")
+                    
+                    # For Samriddhi, we don't have a separate Non-RIS cluster usually, 
+                    # but we can set it to empty or copy RIS Cluster if needed. 
+                    # Let's keep it empty as it's a different data structure.
+                    business_pivot["Non RIS Cluster"] = ""
+                    business_pivot["Non RIS Qty"] = 0
+                    
+                    # Optional: Map Brand and Manager from Samriddhi file if they are missing in PM or vice versa
+                    s_brand_col = next((c for c in ris_data.columns if c.lower() == 'brand'), None)
+                    if s_brand_col:
+                        s_brand_map = ris_data.drop_duplicates('asin').set_index('asin')[s_brand_col].to_dict()
+                        # Only fill if missing
+                        business_pivot['Brand'] = business_pivot['Brand'].fillna(business_pivot['_mapping_key'].map(s_brand_map))
+                    
+                    s_manager_col = next((c for c in ris_data.columns if c.lower() == 'brand manager'), None)
+                    if s_manager_col:
+                        s_manager_map = ris_data.drop_duplicates('asin').set_index('asin')[s_manager_col].to_dict()
+                        # Only fill if missing
+                        business_pivot['Brand Manager'] = business_pivot['Brand Manager'].fillna(business_pivot['_mapping_key'].map(s_manager_map))
+
+                    # Cleanup temp key
+                    if "_mapping_key" in business_pivot.columns:
+                        business_pivot = business_pivot.drop(columns=["_mapping_key"])
+
                 else: # Manager
                     # Normalize columns to handle variations
                     ris_data.columns = ris_data.columns.str.strip()
@@ -341,14 +505,7 @@ if process_button:
                     # Usually "Vlookup" implies taking from the same row we got the cluster from. 
                     # Let's map Total Units from the RIS High row.
                     ris_total_map = ris_high_dedup.set_index("asin")["total_units"].to_dict()
-                    business_pivot["Total RIS Units"] = business_pivot["_mapping_key"].map(ris_total_map).fillna(0) # Rename to differentiate from mapped stock? Or just Total RIS File Units
-                    
-                    # Debugging: Check match rate
-                    bp_asins = set(business_pivot["_mapping_key"].unique())
-                    ris_asins = set(ris_high_cluster_map.keys())
-                    matches = bp_asins.intersection(ris_asins)
-                    
-                    st.info(f"debug: Manager Mode. Found {len(ris_asins)} distinct ASINs in RIS File. Matched {len(matches)} with Business Report.")
+                    business_pivot["Total RIS Units"] = business_pivot["_mapping_key"].map(ris_total_map).fillna(0) 
                     
                     # Cleanup temp key
                     if "_mapping_key" in business_pivot.columns:
@@ -387,6 +544,19 @@ if process_button:
                     ]
                     # Note: User didn't request State columns or Total RIS Units for Manager specific view.
                     # Keeping it minimal as requested.
+                elif role == "RIS Samriddhi":
+                    column_order = [
+                        "SKU", "(Child) ASIN", "Vendor SKU Codes", "Brand", "Brand Manager",
+                        "Total Order Items", "Total Order Items - B2B", "Total Sales",
+                        "afn-fulfillable-quantity", "afn-reserved-quantity", "Total Stock",
+                        "DRR", "DOC", "RIS Cluster", "RIS Qty", "Non RIS Cluster", "Non RIS Qty"
+                    ]
+                    
+                    # Check for sorted_weeks from earlier in the script
+                    # If they are available in scope, add them. Otherwise, collect them from dataframe columns.
+
+                    
+                    column_order.append("PO State")
                 else:
                     column_order = [
                         "SKU", "(Child) ASIN", "Vendor SKU Codes", "Brand", "Brand Manager",
@@ -550,10 +720,14 @@ if st.session_state.processed and st.session_state.business_pivot is not None:
             ris_high_summary = df.groupby("RIS Cluster")["RIS Qty"].sum().sort_values(ascending=False).head(10)
             st.dataframe(ris_high_summary, use_container_width=True)
         
-        with col2:
-            st.write("**Top Non-RIS Clusters (Highest Non-RIS Quantity)**")
-            ris_low_summary = df.groupby("Non RIS Cluster")["Non RIS Qty"].sum().sort_values(ascending=False).head(10)
-            st.dataframe(ris_low_summary, use_container_width=True)
+        if "Non RIS Cluster" in df.columns and "Non RIS Qty" in df.columns:
+            with col2:
+                st.write("**Top Non-RIS Clusters (Highest Non-RIS Quantity)**")
+                ris_low_summary = df.groupby("Non RIS Cluster")["Non RIS Qty"].sum().sort_values(ascending=False).head(10)
+                st.dataframe(ris_low_summary, use_container_width=True)
+        else:
+            with col2:
+                st.info("ℹ️ Non-RIS data not applicable for this role.")
         
         st.divider()
         
